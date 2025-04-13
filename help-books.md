@@ -1,147 +1,142 @@
-ng stubborn system caches
-- Development-time workflows
+# 🧭 Reverse-Engineered Guide to macOS Help System (Tips.app, HelpViewer, and Caching)
+
+This guide summarizes everything discovered while reverse-engineering the macOS Help Book system as of macOS 15 (“Sequoia”), especially with regard to the new `Tips.app`-based viewer, persistent caching behavior, and command-line inspection tools.
 
 ---
 
-## 📁 1. Help Book Folder Structure
+## 📘 Help Viewer Architecture (macOS 15+)
 
-Your Help Book must be structured like this inside your app bundle:
-
-```
-MRIQuantSim.app/
-└── Contents/
-    └── Resources/
-            └── MRIQuantSimHelp.help/
-	                └── Contents/
-			                ├── Info.plist
-					                └── Resources/
-							                    ├── en.lproj/
-									                        │   └── index.html
-												                    └── MRIQuantSim.cshelpindex (optional but recommended)
-														    ```
-
-> Place `index.html` inside a language-specific `.lproj` folder (e.g., `en.lproj`) for reliability.
+- `Tips.app` **is the new user interface** for Help Books.
+- It is located at:
+  ```
+  /System/Applications/Tips.app
+  ```
+- Despite the new name, its bundle identifier is still:
+  ```
+  com.apple.helpviewer
+  ```
+- Help Books are **registered** with the system and then opened via `Tips.app`.
 
 ---
 
-## 🧾 2. Help Book Info.plist (inside `.help/Contents/Info.plist`)
+## 📁 Help Book Location and Registration
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-"http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleHelpBookName</key>
-        <string>MRIQuantSimHelp</string>
-	    <key>CFBundleIdentifier</key>
-	        <string>net.endoquant.MRIQuantSim.help</string>
-		    <key>HPDBookAccessPath</key>
-		        <string>index.html</string>
-			</dict>
-			</plist>
-			```
+When a Help Book is first opened (usually via `Help > [AppName] Help`):
+
+- macOS **copies the entire `.help` bundle** from the app into:
+  ```
+  ~/Library/Group Containers/group.com.apple.helpviewer.content/Library/Caches/
+  ```
+  Example:
+  ```
+  net.endoquant.MRIQuantSim.net.endoquant.MRIQuantSim.help*1.0.help
+  ```
+
+This copy is **persisted across app builds** and must be manually removed to reflect updates.
 
 ---
 
-## 🧾 3. App’s `Info.plist` (main bundle)
+## 🔧 Help Book Cache Management
 
-```xml
-<key>CFBundleHelpBookFolder</key>
-<string>MRIQuantSimHelp.help</string>
-<key>CFBundleHelpBookName</key>
-<string>MRIQuantSimHelp</string>
-```
-
-These tell macOS where to find the Help Book and what to call it in the menu.
-
----
-
-## 🧪 4. Generate the Help Index (optional but recommended)
-
-```bash
-hiutil -I corespotlight -Caf MRIQuantSim.cshelpindex MRIQuantSimHelp.help/Contents/Resources/
-```
-
-Place the resulting `MRIQuantSim.cshelpindex` into the same Resources folder.
-
----
-
-## 🧹 5. Clear System Help Caches (during development)
-
-If your help page isn't updating, run:
-
-```bash
-hiutil -P
-killall -9 Tips helpd
-rm -f ~/Library/Preferences/com.apple.help.plist
-```
-
-This purges Help system processes and preference caches — but does **not** clear the most persistent cache...
-
----
-
-## 💣 6. The Secret Cache You *Must* Clear
-
-The real culprit is here:
-
-```
-~/Library/Group Containers/group.com.apple.helpviewer.content/Library/Caches/
-```
-
-macOS creates a full copy of your Help Book on **first launch**, named like:
-
-```
-<your-app-id>.<help-book-id>*<version>.help
-```
-
-To force an update:
-
+### ✅ Delete cached Help Book:
 ```bash
 rm -rf ~/Library/Group\ Containers/group.com.apple.helpviewer.content/Library/Caches/net.endoquant.MRIQuantSim.*
 ```
 
----
+### ✅ Kill Help Viewer daemons:
+```bash
+killall -9 helpd Tips
+```
 
-## 🧰 7. Troubleshooting Flowchart
-
-1. ❓ Content not updating?
-2. ✅ Confirm index.html is correct in `.help`
-3. ✅ Confirm app Info.plist keys are correct
-4. ✅ Clean and rebuild
-5. ✅ Run `hiutil -P` and clear Preferences
-6. ✅ **Delete cached copy in Group Containers**
-7. ✅ Relaunch app and re-test
+### ✅ Reset Help system preferences:
+```bash
+rm ~/Library/Preferences/com.apple.help.plist
+```
 
 ---
 
-## 🧪 8. Dev Tip: Rename Help Book to Force Fresh Load
+## 🛠️ Command-Line Tools
 
-When you hit a wall, try:
+### 🔎 View registered Help Books:
+```bash
+plutil -p ~/Library/Preferences/com.apple.help.plist
+```
 
-- Renaming `MRIQuantSimHelp.help` to `MRIQuantSimHelpV2.help`
-- Updating all `Info.plist` keys accordingly
-- Changing `index.html` to `index2.html` and updating `HPDBookAccessPath`
-
-This tricks macOS into treating your Help Book as completely new.
-
----
-
-## 📌 9. Summary: Do’s and Don’ts
-
-✅ DO:
-- Use `en.lproj/index.html`
-- Use `hiutil -P` regularly during testing
-- Include `.cshelpindex` if pre-indexing content
-- Clear Group Container cache manually
-
-❌ DON’T:
-- Assume `index.html` is live once it appears in Help Viewer
-- Trust `hiutil -Tvf` to validate modern `.cshelpindex` files (it no longer works)
+This lists all Help Books known to the system, including:
+- `appBundleUrl`
+- `helpBookId`
+- `version`
+- `cached url`
 
 ---
 
-## 📎 License
+### 🔎 Inspect Help system logs:
+```bash
+log stream --predicate 'subsystem == "com.apple.helpviewer"' --info
+```
 
-MIT
-~
+Use this to monitor registration, loading, and Tips activity.
+
+---
+
+### 🔎 Confirm the identity of `Tips.app`:
+```bash
+osascript -e 'id of app "Tips"'
+# Returns: com.apple.helpviewer
+```
+
+---
+
+## 📦 Indexing Help Books
+
+Modern Help Books use `.cshelpindex` files (Core Spotlight format).
+
+### ✅ Generate a new index:
+```bash
+hiutil -I corespotlight -Caf MRIQuantSim.cshelpindex MRIQuantSimHelp.help/Contents/Resources/
+```
+
+### ✅ Purge system Help Viewer caches:
+```bash
+hiutil -P
+```
+
+---
+
+## 🧪 Help Book Build Automation
+
+### ✅ Smart script to conditionally clear Help Viewer cache:
+- Computes a hash of `.html` and `.plist` files
+- Clears cache only when contents change
+- Stores hash in:
+  ```
+  $BUILD_DIR/help_cache_last_hash.txt
+  ```
+
+**Benefits**:
+- Doesn’t rely on Xcode’s dependency system
+- Avoids fragile timestamps
+- Works reliably in sandboxed builds
+
+---
+
+## 🪛 Files and Paths Summary
+
+| Purpose                        | Path |
+|-------------------------------|------|
+| Cached Help Books             | `~/Library/Group Containers/group.com.apple.helpviewer.content/Library/Caches/` |
+| Help Book preferences         | `~/Library/Preferences/com.apple.help.plist` |
+| Help Viewer logs              | `log stream --predicate 'subsystem == "com.apple.helpviewer"'` |
+| Help Viewer UI                | `/System/Applications/Tips.app` |
+| Help Book copy source         | `YourApp.app/Contents/Resources/YourHelp.help` |
+| Help Index (new format)       | `.cshelpindex` |
+| Index generator               | `hiutil` |
+
+---
+
+## ✅ Recommendations
+
+- Never assume Help Books are read live from your bundle — macOS copies them.
+- Clear the cache whenever HTML changes, or use a smart script to detect changes.
+- Avoid relying on `Use discovered dependency file` — timestamp precision is not reliable.
+- Use command-line tools (`hiutil`, `plutil`, `log stream`) to inspect system behavior.
